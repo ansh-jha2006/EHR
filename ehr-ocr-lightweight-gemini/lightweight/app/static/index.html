@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EHR Clinical Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; }
+        header { background-color: #2c3e50; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .container { padding: 2rem; max-width: 1200px; margin: auto; }
+        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+        .search-box { display: flex; gap: 1rem; margin-bottom: 1rem; }
+        input[type="number"], input[type="file"] { padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; flex-grow: 1; }
+        button { padding: 0.5rem 1rem; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; margin-right: 0.5rem; margin-bottom: 0.4rem; }
+        .badge-high { background-color: #e74c3c; color: white; }
+        .badge-moderate { background-color: #f39c12; color: white; }
+        .badge-low { background-color: #2ecc71; color: white; }
+        pre { background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.9rem; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>EHR Clinical Dashboard</h1>
+        <div style="display: flex; gap: 20px; align-items: center;">
+            <div id="health-indicator" style="font-size: 0.8rem; padding: 5px 10px; border-radius: 20px; background: #34495e;">Checking System...</div>
+            <div id="status">Status: Ready</div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h3>System Configuration</h3>
+            <div id="health-details" style="font-size: 0.9rem; line-height: 1.6;">Loading system details...</div>
+        </div>
+
+        <!-- Report Upload + Gemini OCR/Analysis -->
+        <div class="card">
+            <h3>Upload Medical Report (Image or PDF)</h3>
+            <p style="color:#7f8c8d; font-size: 0.9rem;">Gemini will OCR the document and produce a clinical summary, key entities, and a severity rating.</p>
+            <div class="search-box">
+                <input type="file" id="report-file" accept="application/pdf,image/png,image/jpeg,image/webp">
+                <button id="analyze-btn" onclick="analyzeReport()">Analyze Report</button>
+            </div>
+            <div id="report-results" style="display:none;">
+                <div class="grid">
+                    <div>
+                        <h4>Summary</h4>
+                        <p id="report-summary" style="font-style: italic;"></p>
+                        <h4>Severity</h4>
+                        <div id="report-severity"></div>
+                        <h4>Recommendation</h4>
+                        <p id="report-recommendation"></p>
+                    </div>
+                    <div>
+                        <h4>Extracted Entities</h4>
+                        <div id="report-entities"></div>
+                    </div>
+                </div>
+                <h4>Extracted Text (OCR)</h4>
+                <pre id="report-text"></pre>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Patient Search (Demo Data)</h3>
+            <div class="search-box">
+                <input type="number" id="hadm_id" placeholder="Enter Admission ID (HADM_ID)..." value="100001">
+                <button onclick="fetchSummary()">Fetch Clinical Summary</button>
+            </div>
+        </div>
+
+        <div id="dashboard-content" style="display: none;">
+            <div class="grid">
+                <div class="card">
+                    <h3>Diagnoses & Recommendations</h3>
+                    <div id="diagnoses"></div>
+                    <hr>
+                    <h4>Recommendation</h4>
+                    <p id="recommendation" style="font-style: italic; color: #2c3e50;"></p>
+                </div>
+                <div class="card">
+                    <h3>Clinical Note Snippets</h3>
+                    <div id="notes"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Set this to your deployed Render backend URL ---
+        const API_BASE = "https://YOUR-RENDER-BACKEND.onrender.com";
+
+        window.onload = async () => {
+            try {
+                const response = await fetch(`${API_BASE}/system_health`);
+                const health = await response.json();
+                const indicator = document.getElementById('health-indicator');
+                indicator.innerText = health.gemini_configured ? 'Gemini Ready' : 'Gemini Key Missing';
+                indicator.style.background = health.gemini_configured ? '#27ae60' : '#e74c3c';
+                document.getElementById('health-details').innerHTML = `
+                    <div><strong>Gemini Model:</strong> ${health.gemini_model}</div>
+                    <div><strong>Database:</strong> ${health.database_status}</div>
+                `;
+            } catch (e) {
+                console.error("Health check failed", e);
+                document.getElementById('health-details').innerText = "Could not reach backend at " + API_BASE;
+            }
+        };
+
+        async function analyzeReport() {
+            const fileInput = document.getElementById('report-file');
+            const btn = document.getElementById('analyze-btn');
+            const status = document.getElementById('status');
+            if (!fileInput.files.length) {
+                status.innerText = "Status: Please choose a file first.";
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            btn.disabled = true;
+            status.innerText = "Status: Analyzing report with Gemini...";
+
+            try {
+                const response = await fetch(`${API_BASE}/analyze_report`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Failed to analyze report');
+                }
+                const data = await response.json();
+                renderReport(data);
+                status.innerText = "Status: Analysis Complete";
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Status: Error - " + error.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function renderReport(data) {
+            document.getElementById('report-results').style.display = 'block';
+            document.getElementById('report-summary').innerText = data.summary;
+            document.getElementById('report-recommendation').innerText = data.recommendation;
+            document.getElementById('report-text').innerText = data.extracted_text;
+
+            const sevClass = data.severity === 'high' ? 'badge-high' : data.severity === 'low' ? 'badge-low' : 'badge-moderate';
+            document.getElementById('report-severity').innerHTML = `<span class="badge ${sevClass}">${(data.severity || 'unknown').toUpperCase()}</span>`;
+
+            const entDiv = document.getElementById('report-entities');
+            entDiv.innerHTML = (data.entities || []).map(e =>
+                `<span class="badge" style="background:#bdc3c7">${e.label}: ${e.value}</span>`
+            ).join('') || 'No entities identified.';
+        }
+
+        async function fetchSummary() {
+            const hadmId = document.getElementById('hadm_id').value;
+            const status = document.getElementById('status');
+            status.innerText = "Status: Fetching...";
+            try {
+                const response = await fetch(`${API_BASE}/summarize?hadm_id=${hadmId}`);
+                if (!response.ok) throw new Error('Failed to fetch summary');
+                const data = await response.json();
+                renderDashboard(data);
+                status.innerText = "Status: Data Loaded";
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Status: Error - " + error.message;
+            }
+        }
+
+        function renderDashboard(data) {
+            document.getElementById('dashboard-content').style.display = 'block';
+            const diagDiv = document.getElementById('diagnoses');
+            diagDiv.innerHTML = data.diagnoses.map(d => `<span class="badge" style="background:#bdc3c7">${d}</span>`).join('') || 'No diagnoses found.';
+            document.getElementById('recommendation').innerText = data.recommendation;
+            const noteDiv = document.getElementById('notes');
+            noteDiv.innerHTML = data.note_snippets.map(n => `<pre>${n.substring(0, 500)}...</pre>`).join('') || 'No notes found.';
+        }
+    </script>
+</body>
+</html>
